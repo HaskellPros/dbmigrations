@@ -1,3 +1,5 @@
+{-# LANGUAGE CPP #-}
+
 module Main where
 import Prelude hiding ( catch )
 import Test.HUnit
@@ -5,7 +7,6 @@ import System.Exit
 import System.Process ( system )
 import System.IO ( stderr )
 
-import qualified BackendTest
 import qualified DependencyTest
 import qualified MigrationsTest
 import qualified FilesystemSerializeTest
@@ -18,12 +19,16 @@ import Control.Monad ( forM )
 import Control.Exception ( finally, catch, SomeException )
 
 import Database.HDBC ( IConnection(disconnect) )
+
+#ifndef WithoutBackendDependencies
+
+import qualified BackendTest
+
 import Database.HDBC.Sqlite3 ( connectSqlite3 )
 import qualified Database.HDBC.PostgreSQL as PostgreSQL
 
-loadTests :: IO [Test]
-loadTests = do
-
+doBackendTests :: IO [Test]
+doBackendTests = do
   sqliteConn <- connectSqlite3 ":memory:"
   pgConn <- setupPostgresDb
 
@@ -35,26 +40,6 @@ loadTests = do
 
   backendTests <- forM backends $ \(name, testAct) -> do
                     return $ (name ++ " backend tests") ~: test testAct
-
-  ioTests <- sequence [ do fspTests <- FilesystemParseTest.tests
-                           return $ "Filesystem Parsing" ~: test fspTests
-                      , do fsTests <- FilesystemTest.tests
-                           return $ "Filesystem general" ~: test fsTests
-                      ]
-  return $ concat [ backendTests
-                  , ioTests
-                  , DependencyTest.tests
-                  , FilesystemSerializeTest.tests
-                  , MigrationsTest.tests
-                  , CycleDetectionTest.tests
-                  , StoreTest.tests
-                  ]
-
-tempPgDatabase :: String
-tempPgDatabase = "dbmigrations_test"
-
-ignoreException :: SomeException -> IO ()
-ignoreException _ = return ()
 
 setupPostgresDb :: IO PostgreSQL.Connection
 setupPostgresDb = do
@@ -76,6 +61,36 @@ teardownPostgresDb = do
   case status of
     ExitSuccess -> return ()
     ExitFailure _ -> error $ "Failed to drop PostgreSQL database " ++ (show tempPgDatabase)
+
+#else
+
+doBackendTests :: IO [Test]
+doBackendTests = return []
+
+#endif
+
+loadTests :: IO [Test]
+loadTests = do
+  backendTests <- doBackendTests
+  ioTests <- sequence [ do fspTests <- FilesystemParseTest.tests
+                           return $ "Filesystem Parsing" ~: test fspTests
+                      , do fsTests <- FilesystemTest.tests
+                           return $ "Filesystem general" ~: test fsTests
+                      ]
+  return $ concat [ backendTests
+                  , ioTests
+                  , DependencyTest.tests
+                  , FilesystemSerializeTest.tests
+                  , MigrationsTest.tests
+                  , CycleDetectionTest.tests
+                  , StoreTest.tests
+                  ]
+
+tempPgDatabase :: String
+tempPgDatabase = "dbmigrations_test"
+
+ignoreException :: SomeException -> IO ()
+ignoreException _ = return ()
 
 main :: IO ()
 main = do

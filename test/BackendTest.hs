@@ -1,4 +1,8 @@
+{-# LANGUAGE CPP #-}
+
 module BackendTest where
+
+#ifndef WithoutBackendDependencies
 
 import Test.HUnit
 import Control.Monad ( forM_ )
@@ -141,3 +145,5 @@ revertMigrationJust conn = do
 
     installed <- getMigrations conn
     assertBool "Check that the migration was reverted" $ not $ name `elem` installed
+
+#endif
