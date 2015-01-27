@@ -57,21 +57,13 @@ migrationParsingTestCases = [ ("valid_full", Right valid_full)
                             , ("valid_no_revert"
                               , Right (valid_full { mId = "valid_no_revert", mRevert = Nothing }))
                             , ("invalid_missing_required_fields"
-                              , Left $ "Error in " ++
-                                         (show $ fp "invalid_missing_required_fields.txt") ++
-                                         ": missing required field(s): " ++
-                                         "[\"Created\",\"Depends\"]")
+                              , Left $ "AesonException \"key \\\"Created\\\" not present\"")
                             , ("invalid_field_name"
-                              , Left $ "Error in " ++
-                                         (show $ fp "invalid_field_name.txt") ++
-                                         ": unrecognized field found")
+                              , Right (valid_full { mId = "invalid_field_name", mDeps = ["valid"], mDesc = Just "The first migration in the store.", mApply = "CREATE TABLE test (a int);" }))
                             , ("invalid_syntax"
-                              , Left $ "user error (syntax error: line 7, " ++
-                                         "column 0)")
+                              , Left $ "InvalidYaml (Just (YamlParseException {yamlProblem = \"could not find expected ':'\", yamlContext = \"while scanning a simple key\", yamlProblemMark = YamlMark {yamlIndex = 130, yamlLine = 6, yamlColumn = 0}}))")
                             , ("invalid_timestamp"
-                              , Left $ "Error in " ++
-                                         (show $ fp "invalid_timestamp.txt") ++
-                                         ": unrecognized field found")
+                              , Left $ "AesonException \"could not parse ISO date\"")
                             ]
 
 mkParsingTest :: MigrationParsingTestCase -> IO Test
