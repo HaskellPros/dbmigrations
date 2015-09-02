@@ -1,22 +1,22 @@
-{-# LANGUAGE FlexibleInstances, MultiParamTypeClasses, OverloadedStrings, LambdaCase #-}
+{-# LANGUAGE DeriveDataTypeable, LambdaCase, OverloadedStrings, ScopedTypeVariables #-}
 -- |This module provides a type for interacting with a
 -- filesystem-backed 'MigrationStore'.
 module Database.Schema.Migrations.Filesystem
-    ( FilesystemStore(..)
+    ( FilesystemStoreSettings(..)
     , migrationFromFile
     , migrationFromPath
+    , filesystemStore
     )
 where
 
 import System.Directory ( getDirectoryContents, doesFileExist )
 import System.FilePath ( (</>), takeExtension, dropExtension
                        , takeFileName, takeBaseName )
-import Control.Monad.Trans ( MonadIO, liftIO )
 
 import Data.Time.Clock ( UTCTime )
 import Data.Time () -- for UTCTime Show instance
 
-import Control.Applicative ( (<$>), (<*>) )
+import Control.Applicative ( (<$>) )
 import Control.Monad ( filterM, mzero )
 import Data.Yaml
 
@@ -26,44 +26,31 @@ import Database.Schema.Migrations.Migration
 import Database.Schema.Migrations.Filesystem.Serialize
 import Database.Schema.Migrations.Store
 
-data FilesystemStore = FSStore { storePath :: FilePath }
+data FilesystemStoreSettings = FSStore { storePath :: FilePath }
 
 filenameExtension :: String
 filenameExtension = ".txt"
 
-instance (MonadIO m) => MigrationStore FilesystemStore m where
-    fullMigrationName s name =
-        return $ storePath s </> name ++ filenameExtension
+filesystemStore :: FilesystemStoreSettings -> MigrationStore
+filesystemStore s =
+    MigrationStore { fullMigrationName = fsFullMigrationName s
 
-    loadMigration s theId = do
-      result <- liftIO $ migrationFromFile s theId
-      return $ case result of
-                 Left _ -> Nothing
-                 Right m -> Just m
+                   , loadMigration = \theId -> migrationFromFile s theId
 
-    getMigrations s = do
-      contents <- liftIO $ getDirectoryContents $ storePath s
-      let migrationFilenames = [ f | f <- contents, isMigrationFilename f ]
-          fullPaths = [ (f, storePath s </> f) | f <- migrationFilenames ]
-      existing <- liftIO $ filterM (\(_, full) -> doesFileExist full) fullPaths
-      return [ dropExtension short | (short, _) <- existing ]
+                   , getMigrations = do
+                       contents <- getDirectoryContents $ storePath s
+                       let migrationFilenames = [ f | f <- contents, isMigrationFilename f ]
+                           fullPaths = [ (f, storePath s </> f) | f <- migrationFilenames ]
+                       existing <- filterM (\(_, full) -> doesFileExist full) fullPaths
+                       return [ dropExtension short | (short, _) <- existing ]
 
-    saveMigration s m = do
-      filename <- fullMigrationName s $ mId m
-      liftIO $ writeFile filename $ serializeMigration m
-
-isMigrationFilename :: FilePath -> Bool
-isMigrationFilename path = takeExtension path == filenameExtension
-
--- |Given a store and migration name, read and parse the associated
--- migration and return the migration if successful.  Otherwise return
--- a parsing error message.
-migrationFromFile :: FilesystemStore -> String -> IO (Either String Migration)
-migrationFromFile store name =
-    fullMigrationName store name >>= migrationFromPath
+                   , saveMigration = \m -> do
+                       filename <- fsFullMigrationName s $ mId m
+                       writeFile filename $ serializeMigration m
+                   }
 
 data JsonMigration = JMigration
-  { jmTimestamp :: UTCTime
+  { jmTimestamp :: Maybe UTCTime
   , jmDesc :: Maybe String
   , jmApply :: String
   , jmRevert :: Maybe String
@@ -82,19 +69,32 @@ toMigration mid jm = Migration
 
 instance FromJSON JsonMigration where
   parseJSON (Object v) = JMigration
-    <$> (v .: "Created" >>= utctimeParse)
+    <$> (v .:? "Created" >>= mapM utctimeParse)
     <*> v .:? "Description"
     <*> v .: "Apply"
     <*> v .:? "Revert"
     <*> depends `fmap` (v .:? "Depends")
     where
-      utctimeParse s = case reads s of 
+      utctimeParse s = case reads s of
         [(t, _)]  -> return t
         _         -> fail "could not parse ISO date"
       depends = \case
         Just s  -> words s
         Nothing -> []
   parseJSON _ = mzero
+
+fsFullMigrationName :: FilesystemStoreSettings -> FilePath -> IO FilePath
+fsFullMigrationName s name = return $ storePath s </> name ++ filenameExtension
+
+isMigrationFilename :: FilePath -> Bool
+isMigrationFilename path = takeExtension path == filenameExtension
+
+-- |Given a store and migration name, read and parse the associated
+-- migration and return the migration if successful.  Otherwise return
+-- a parsing error message.
+migrationFromFile :: FilesystemStoreSettings -> String -> IO (Either String Migration)
+migrationFromFile store name =
+    fsFullMigrationName store name >>= migrationFromPath
 
 -- |Given a filesystem path, read and parse the file as a migration
 -- return the 'Migration' if successful.  Otherwise return a parsing

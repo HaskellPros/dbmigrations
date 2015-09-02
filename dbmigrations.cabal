@@ -1,5 +1,5 @@
 Name:                dbmigrations
-Version:             0.8
+Version:             0.9
 Synopsis:            An implementation of relational database "migrations"
 Description:         A library and program for the creation,
                      management, and installation of schema updates
@@ -14,7 +14,7 @@ Description:         A library and program for the creation,
                      HDBC-supported database, although at present only
                      PostgreSQL is fully supported.
 
-                     To get started, see the included 'README' and
+                     To get started, see the included 'README.md' and
                      'MOO.TXT' files and the usage output for the
                      'moo' command.
 
@@ -25,7 +25,25 @@ Build-Type:          Simple
 License:             BSD3
 License-File:        LICENSE
 Cabal-Version:       >= 1.10
-Data-Files:          README MOO.TXT
+
+Data-Files:
+  README.md
+  MOO.TXT
+  test/example_store/root
+  test/example_store/update1
+  test/example_store/update2
+  test/migration_parsing/invalid_field_name.txt
+  test/migration_parsing/invalid_missing_required_fields.txt
+  test/migration_parsing/invalid_syntax.txt
+  test/migration_parsing/invalid_timestamp.txt
+  test/migration_parsing/valid_full.txt
+  test/migration_parsing/valid_no_depends.txt
+  test/migration_parsing/valid_no_desc.txt
+  test/migration_parsing/valid_no_revert.txt
+  test/migration_parsing/valid_with_colon.txt
+  test/migration_parsing/valid_with_comments.txt
+  test/migration_parsing/valid_with_comments2.txt
+  test/migration_parsing/valid_with_multiline_deps.txt
 
 Source-Repository head
   type:     git
@@ -45,14 +63,19 @@ Library
 
   Build-Depends:
     base >= 4 && < 5,
-    containers >= 0.2 && < 0.6,
-    directory >= 1.0 && < 1.3,
-    fgl >= 5.4 && < 5.6,
-    filepath >= 1.1 && < 1.4,
     HDBC >= 2.2.1,
-    mtl >= 2.1 && < 3,
-    time >= 1.4 && < 1.6,
-    yaml
+    time >= 1.4,
+    random >= 1.0,
+    containers >= 0.2,
+    mtl >= 2.1,
+    filepath >= 1.1,
+    directory >= 1.0,
+    fgl >= 5.4,
+    template-haskell,
+    yaml,
+    bytestring >= 0.9,
+    text >= 0.11,
+    configurator >= 0.2
 
   Hs-Source-Dirs:    src
   Exposed-Modules:
@@ -74,25 +97,37 @@ test-suite dbmigrations-tests
   Build-Depends:
     dbmigrations,
     base >= 4 && < 5,
-    time >= 1.4 && < 1.6,
-    containers >= 0.2 && < 0.6,
-    mtl >= 2.1 && < 3,
-    filepath >= 1.1 && < 1.4,
-    directory >= 1.0 && < 1.3,
-    fgl >= 5.4 && < 5.6,
+    time >= 1.4,
+    containers >= 0.2,
+    mtl >= 2.1,
+    filepath >= 1.1,
+    directory >= 1.0,
+    fgl >= 5.4,
     template-haskell,
-    bytestring >= 0.9 && < 1.0,
+    yaml >= 0.1,
+    bytestring >= 0.9,
     HDBC >= 2.2.1,
-    HUnit >= 1.2 && < 1.3,
-    process >= 1.1,
-    yaml
+    HDBC-postgresql,
+    HDBC-sqlite3,
+    HUnit >= 1.2,
+    process >= 1.1
 
   if flag(dbm-only-library)
     Cpp-Options:   -DWithoutBackendDependencies
   else
-    Build-Depends:
-      HDBC-postgresql,
-      HDBC-sqlite3
+    other-modules:
+      BackendTest
+      Common
+      CommonTH
+      CycleDetectionTest
+      DependencyTest
+      FilesystemParseTest
+      FilesystemSerializeTest
+      FilesystemTest
+      MigrationsTest
+      StoreTest
+      TestDriver
+
 
   if impl(ghc >= 6.12.0)
     ghc-options: -threaded -Wall -fwarn-tabs -funbox-strict-fields
@@ -105,7 +140,7 @@ test-suite dbmigrations-tests
 
 Executable moo
   default-language: Haskell2010
-  
+
   if flag(dbm-only-library)
     Buildable:     False
 
@@ -113,17 +148,18 @@ Executable moo
     dbmigrations,
     base >= 4 && < 5,
     HDBC >= 2.2.1,
-    time >= 1.4 && < 1.6,
-    random >= 1.0 && < 1.2,
-    containers >= 0.2 && < 0.6,
-    mtl >= 2.1 && < 3,
-    filepath >= 1.1 && < 1.4,
-    directory >= 1.0 && < 1.3,
-    fgl >= 5.4 && < 5.6,
+    time >= 1.4,
+    random >= 1.0,
+    containers >= 0.2,
+    mtl >= 2.1,
+    filepath >= 1.1,
+    directory >= 1.0,
+    fgl >= 5.4,
     template-haskell,
-    bytestring >= 0.9 && < 1.0,
-    text >= 0.11 && < 1.3,
-    configurator >= 0.2 && < 0.4
+    yaml >= 0.1,
+    bytestring >= 0.9,
+    text >= 0.11,
+    configurator >= 0.2
 
   if !flag(dbm-only-library)
     Build-Depends:
@@ -136,7 +172,7 @@ Executable moo
   else
     ghc-options: -threaded -Wall -fwarn-tabs -funbox-strict-fields
 
-  Hs-Source-Dirs:  src
+  Hs-Source-Dirs:  programs
   Main-is:         Moo.hs
   Other-Modules:
     Moo.CommandHandlers
