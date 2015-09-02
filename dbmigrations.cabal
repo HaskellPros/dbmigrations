@@ -172,7 +172,7 @@ Executable moo
   else
     ghc-options: -threaded -Wall -fwarn-tabs -funbox-strict-fields
 
-  Hs-Source-Dirs:  programs
+  Hs-Source-Dirs:  programs, src
   Main-is:         Moo.hs
   Other-Modules:
     Moo.CommandHandlers
