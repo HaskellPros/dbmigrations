@@ -1,26 +1,26 @@
-module Main
-    ( main )
+module Moo.Main
+    ( mainWithConf
+    , Configuration (..)
+    , Args
+    , usage
+    , usageSpecific
+    , procArgs
+    )
 where
 
-import  Control.Monad (liftM)
 import  Control.Monad.Reader (forM_, runReaderT, when)
-import  Data.Configurator
 import  Data.List (intercalate)
-import  Data.Maybe (fromMaybe)
 import  Database.HDBC (SqlError, catchSql, seErrorMsg)
 import  Prelude  hiding (lookup)
-import  System.Environment (getArgs, getEnvironment, getProgName)
+import  System.Environment (getProgName)
 import  System.Exit (ExitCode (ExitFailure), exitWith)
-                                               
-import  Database.Schema.Migrations.Filesystem (FilesystemStore (..))
+
+import  Database.Schema.Migrations.Filesystem (filesystemStore, FilesystemStoreSettings(..))
 import  Database.Schema.Migrations.Store
 import  Moo.CommandInterface
 import  Moo.Core
 
-reportSqlError :: SqlError -> IO a
-reportSqlError e = do
-  putStrLn $ "\n" ++ "A database error occurred: " ++ seErrorMsg e
-  exitWith (ExitFailure 1)
+type Args = [String]
 
 usage :: IO a
 usage = do
@@ -43,36 +43,30 @@ usage = do
 
 usageSpecific :: Command -> IO a
 usageSpecific command = do
-  putStrLn $ "Usage: initstore-fs " ++ usageString command
+  pn <- getProgName
+  putStrLn $ "Usage: " ++ pn ++ " " ++ usageString command
   exitWith (ExitFailure 1)
 
-loadConfiguration :: Maybe FilePath -> IO Configuration
-loadConfiguration Nothing = liftM fromShellEnvironment getEnvironment
-loadConfiguration (Just path) = fromConfigurator =<< load [Required path]
+procArgs :: Args -> IO (Command, CommandOptions, [String])
+procArgs args = do
+  when (null args) usage
 
-main :: IO ()
-main = do
-  allArgs <- getArgs
-  when (null allArgs) usage
-  let (commandName:unprocessedArgs) = allArgs
-
-  command <- case findCommand commandName of
+  command <- case findCommand $ head args of
                Nothing -> usage
                Just c -> return c
 
-  (opts, required) <- getCommandArgs unprocessedArgs
+  (opts, required) <- getCommandArgs $ tail args
 
-  let optionalConfigPath = _configFilePath opts
+  return (command, opts, required)
 
-  conf <- loadConfiguration optionalConfigPath
-  let mDbConnStr = _connectionString conf
-  let mDbType = _databaseType conf
-  let mStoreName = _migrationStorePath conf
-  let  storePathStr =
-         fromMaybe (error $ "Error: missing required environment variable " ++ envStoreName)
-                   mStoreName
+mainWithConf :: Args -> Configuration -> IO ()
+mainWithConf args conf = do
+  (command, opts, required) <- procArgs args
 
-  let  store = FSStore { storePath = storePathStr }
+  let dbConnStr = _connectionString conf
+      dbType = _databaseType conf
+      storePathStr = _migrationStorePath conf
+      store = filesystemStore $ FSStore { storePath = storePathStr }
 
   if length required < length ( _cRequired command) then
       usageSpecific command else
@@ -87,9 +81,14 @@ main = do
                               , _appCommand = command
                               , _appRequiredArgs = required
                               , _appOptionalArgs = ["" :: String]
-                              , _appDatabaseConnStr = liftM DbConnDescriptor mDbConnStr
-                              , _appDatabaseType = mDbType
-                              , _appStore = FSStore storePathStr
+                              , _appDatabaseConnStr = DbConnDescriptor dbConnStr
+                              , _appDatabaseType = dbType
+                              , _appStore = store
                               , _appStoreData = storeData
                               }
             runReaderT (_cHandler command storeData) st `catchSql` reportSqlError
+
+reportSqlError :: SqlError -> IO a
+reportSqlError e = do
+  putStrLn $ "\n" ++ "A database error occurred: " ++ seErrorMsg e
+  exitWith (ExitFailure 1)

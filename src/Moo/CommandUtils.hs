@@ -1,12 +1,12 @@
 {-# LANGUAGE FlexibleContexts #-}
-
 module Moo.CommandUtils
        ( apply
        , confirmCreation
        , interactiveAskDeps
        , lookupMigration
        , revert
-       , withConnection
+       , withBackend
+       , makeBackend
        ) where
 
 import Control.Exception ( bracket )
@@ -14,18 +14,13 @@ import Control.Monad ( when, forM_, unless )
 import Control.Monad.Reader ( asks )
 import Control.Monad.Trans ( liftIO )
 import Data.List ( intercalate, sortBy )
-import Data.Maybe ( fromJust, isNothing, isJust )
+import Data.Maybe ( fromJust, isJust )
 import System.Exit ( exitWith, ExitCode(..) )
 import System.IO ( stdout, hFlush, hGetBuffering
                  , hSetBuffering, stdin, BufferMode(..) )
-import Database.HDBC ( IConnection, disconnect )
-
 
 import Database.Schema.Migrations ( migrationsToApply, migrationsToRevert )
-import Database.Schema.Migrations.Backend ( Backend
-                                          , applyMigration
-                                          , revertMigration
-                                          )
+import Database.Schema.Migrations.Backend (Backend(..))
 import Database.Schema.Migrations.Migration ( Migration(..) )
 import Database.Schema.Migrations.Store ( StoreData
                                         , storeLookup
@@ -33,9 +28,7 @@ import Database.Schema.Migrations.Store ( StoreData
                                         )
 import Moo.Core
 
-
-apply :: (IConnection b, Backend b IO)
-         => Migration -> StoreData -> b -> Bool -> IO [Migration]
+apply :: Migration -> StoreData -> Backend -> Bool -> IO [Migration]
 apply m storeData backend complain = do
   -- Get the list of migrations to apply
   toApply <- migrationsToApply storeData backend m
@@ -57,9 +50,7 @@ apply m storeData backend complain = do
         applyMigration conn it
         putStrLn "done."
 
-
-revert :: (IConnection b, Backend b IO)
-          => Migration -> StoreData -> b -> IO [Migration]
+revert :: Migration -> StoreData -> Backend -> IO [Migration]
 revert m storeData backend = do
   -- Get the list of migrations to revert
   toRevert <- liftIO $ migrationsToRevert storeData backend m
@@ -90,37 +81,26 @@ lookupMigration storeData name = do
       exitWith (ExitFailure 1)
     Just m' -> return m'
 
-
 -- Given a database type string and a database connection string,
 -- return a database connection or raise an error if the database
 -- connection cannot be established, or if the database type is not
 -- supported.
-makeConnection :: String -> DbConnDescriptor -> IO AnyIConnection
-makeConnection dbType (DbConnDescriptor connStr) =
+makeBackend :: String -> DbConnDescriptor -> IO Backend
+makeBackend dbType (DbConnDescriptor connStr) =
     case lookup dbType databaseTypes of
       Nothing -> error $ "Unsupported database type " ++ show dbType ++
                  " (supported types: " ++
                  intercalate "," (map fst databaseTypes) ++ ")"
-      Just mkConnection -> mkConnection connStr
-
+      Just mkBackend -> mkBackend connStr
 
 -- Given an action that needs a database connection, connect to the
 -- database using the application configuration and invoke the action
 -- with the connection.  Return its result.
-withConnection :: (AnyIConnection -> IO a) -> AppT a
-withConnection act = do
-  mDbPath <- asks _appDatabaseConnStr
-  when (isNothing mDbPath) $ error $ "Error: Database connection string not \
-                                     \specified, please set " ++ envDatabaseName
-  mDbType <- asks _appDatabaseType
-  when (isNothing mDbType) $
-       error $ "Error: Database type not specified, " ++
-                 "please set " ++ envDatabaseType ++
-                 " (supported types: " ++
-                 intercalate "," (map fst databaseTypes) ++ ")"
-  liftIO $ bracket (makeConnection (fromJust mDbType) (fromJust mDbPath))
-             (\(AnyIConnection conn) -> disconnect conn) act
-
+withBackend :: (Backend -> IO a) -> AppT a
+withBackend act = do
+  dbPath <- asks _appDatabaseConnStr
+  dbType <- asks _appDatabaseType
+  liftIO $ bracket (makeBackend dbType dbPath) disconnectBackend act
 
 -- Given a migration name and selected dependencies, get the user's
 -- confirmation that a migration should be created.
@@ -134,7 +114,6 @@ confirmCreation migrationId deps = do
   prompt "Are you sure?" [ ('y', (True, Nothing))
                          , ('n', (False, Nothing))
                          ]
-
 
 -- Prompt the user for a choice, given a prompt and a list of possible
 -- choices.  Let the user get help for the available choices, and loop
@@ -157,7 +136,6 @@ prompt message choiceMap = do
       helpChar = if hasHelp choiceMap then "h" else ""
       choiceMapWithHelp = choiceMap ++ [('h', (undefined, Just "this help"))]
 
-
 -- Given a PromptChoices, build a multi-line help string for those
 -- choices using the description information in the choice list.
 mkPromptHelp :: PromptChoices a -> String
@@ -165,17 +143,14 @@ mkPromptHelp choices =
     intercalate "" [ [c] ++ ": " ++ fromJust msg ++ "\n" |
                      (c, (_, msg)) <- choices, isJust msg ]
 
-
 -- Does the specified prompt choice list have any help messages in it?
 hasHelp :: PromptChoices a -> Bool
 hasHelp = (> 0) . length . filter hasMsg
     where hasMsg (_, (_, m)) = isJust m
 
-
 -- A general type for a set of choices that the user can make at a
 -- prompt.
 type PromptChoices a = [(Char, (a, Maybe String))]
-
 
 -- Get an input character in non-buffered mode, then restore the
 -- original buffering setting.
@@ -187,12 +162,10 @@ unbufferedGetChar = do
   hSetBuffering stdin bufferingMode
   return c
 
-
 -- The types for choices the user can make when being prompted for
 -- dependencies.
 data AskDepsChoice = Yes | No | View | Done | Quit
                      deriving (Eq)
-
 
 -- Interactively ask the user about which dependencies should be used
 -- when creating a new migration.
@@ -204,7 +177,6 @@ interactiveAskDeps storeData = do
   interactiveAskDeps' storeData (map mId sorted)
       where
         compareTimestamps m1 m2 = compare (mTimestamp m2) (mTimestamp m1)
-
 
 -- Recursive function to prompt the user for dependencies and let the
 -- user view information about potential dependencies.  Returns a list
@@ -236,7 +208,6 @@ interactiveAskDeps' storeData (name:rest) = do
             putStrLn "cancelled."
             exitWith (ExitFailure 1)
           Done -> return []
-
 
 -- The choices the user can make when being prompted for dependencies.
 askDepsChoices :: PromptChoices AskDepsChoice

@@ -22,7 +22,7 @@ module Database.Schema.Migrations.Store
     )
 where
 
-import Data.Maybe ( catMaybes, isJust )
+import Data.Maybe ( isJust )
 import Control.Monad ( mzero )
 import Control.Applicative ( (<$>) )
 import qualified Data.Map as Map
@@ -45,25 +45,26 @@ data StoreData = StoreData { storeDataMapping :: MigrationMap
                            , storeDataGraph :: DependencyGraph Migration
                            }
 
--- |A type class for types which represent a storage facility (and a
--- monad context in which to operate on the store).  A MigrationStore
--- is a facility in which new migrations can be created, and from
--- which existing migrations can be loaded.
-class (Monad m) => MigrationStore s m where
-    -- |Load a migration from the store.
-    loadMigration :: s -> String -> m (Maybe Migration)
+-- |The type of migration storage facilities. A MigrationStore is a
+-- facility in which new migrations can be created, and from which
+-- existing migrations can be loaded.
+data MigrationStore =
+    MigrationStore { loadMigration :: String -> IO (Either String Migration)
+                   -- ^ Load a migration from the store.
 
-    -- |Save a migration to the store.
-    saveMigration :: s -> Migration -> m ()
+                   , saveMigration :: Migration -> IO ()
+                   -- ^ Save a migration to the store.
 
-    -- |Return a list of all available migrations' names.
-    getMigrations :: s -> m [String]
+                   , getMigrations :: IO [String]
+                   -- ^ Return a list of all available migrations'
+                   -- names.
 
-    -- |Return the full representation of a given migration name;
-    -- mostly for filesystem stores, where the full representation
-    -- includes the store path.
-    fullMigrationName :: s -> String -> m String
-    fullMigrationName _ name = return name
+                   , fullMigrationName :: String -> IO String
+                   -- ^ Return the full representation of a given
+                   -- migration name; mostly for filesystem stores,
+                   -- where the full representation includes the store
+                   -- path.
+                   }
 
 -- |A type for types of validation errors for migration maps.
 data MapValidationError = DependencyReferenceError String String
@@ -73,6 +74,8 @@ data MapValidationError = DependencyReferenceError String String
                           -- ^ An error was encountered when
                           -- constructing the dependency graph for
                           -- this store.
+                        | InvalidMigration String
+                          -- ^ The specified migration is invalid.
                           deriving (Eq)
 
 instance Show MapValidationError where
@@ -80,6 +83,8 @@ instance Show MapValidationError where
         "Migration " ++ (show from) ++ " references nonexistent dependency " ++ show to
     show (DependencyGraphError msg) =
         "There was an error constructing the dependency graph: " ++ msg
+    show (InvalidMigration msg) =
+        "There was an error loading a migration: " ++ msg
 
 -- |A convenience function for extracting the list of 'Migration's
 -- extant in the specified 'StoreData'.
@@ -97,15 +102,22 @@ storeLookup storeData migrationName =
 -- loaded migrations, and return errors or a 'MigrationMap' on
 -- success.  Generally speaking, this will be the first thing you
 -- should call once you have constructed a 'MigrationStore'.
-loadMigrations :: (MigrationStore s m) => s -> m (Either [MapValidationError] StoreData)
+loadMigrations :: MigrationStore -> IO (Either [MapValidationError] StoreData)
 loadMigrations store = do
   migrations <- getMigrations store
-  loaded <- mapM (\name -> loadMigration store name) migrations
-  let mMap = Map.fromList $ [ (mId e, e) | e <- catMaybes $ loaded ]
-      validationErrors = validateMigrationMap mMap
+  loadedWithErrors <- mapM (\name -> loadMigration store name) migrations
 
-  case null validationErrors of
-    False -> return $ Left validationErrors
+  let mMap = Map.fromList $ [ (mId e, e) | e <- loaded ]
+      validationErrors = validateMigrationMap mMap
+      (loaded, loadErrors) = sortResults loadedWithErrors ([], [])
+      allErrors = validationErrors ++ (InvalidMigration <$> loadErrors)
+
+      sortResults [] v = v
+      sortResults (Left e:rest) (ms, es) = sortResults rest (ms, e:es)
+      sortResults (Right m:rest) (ms, es) = sortResults rest (m:ms, es)
+
+  case null allErrors of
+    False -> return $ Left allErrors
     True -> do
       -- Construct a dependency graph and, if that succeeds, return
       -- StoreData.

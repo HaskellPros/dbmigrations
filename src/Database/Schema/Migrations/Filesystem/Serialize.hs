@@ -28,7 +28,10 @@ serializeDesc m =
       Just desc -> Just $ "Description: " ++ desc
 
 serializeTimestamp :: FieldSerializer
-serializeTimestamp m = Just $ "Created: " ++ (show $ mTimestamp m)
+serializeTimestamp m =
+    case mTimestamp m of
+        Nothing -> Nothing
+        Just ts -> Just $ "Created: " ++ (show ts)
 
 serializeDepends :: FieldSerializer
 serializeDepends m = Just $ "Depends: " ++ (intercalate " " $ mDeps m)
@@ -37,11 +40,11 @@ serializeRevert :: FieldSerializer
 serializeRevert m =
     case mRevert m of
       Nothing -> Nothing
-      Just revert -> Just $ "Revert:\n" ++
+      Just revert -> Just $ "Revert: |\n" ++
                      (serializeMultiline revert)
 
 serializeApply :: FieldSerializer
-serializeApply m = Just $ "Apply:\n" ++ (serializeMultiline $ mApply m)
+serializeApply m = Just $ "Apply: |\n" ++ (serializeMultiline $ mApply m)
 
 commonPrefix :: String -> String -> String
 commonPrefix a b = map fst $ takeWhile (uncurry (==)) (zip a b)
